@@ -14,10 +14,10 @@ var completionCommands = []string{
 func bashCompletionScript() string {
 	return `_aegisctl_completion() {
 	local cur commands
-	cur = "${COMP_WORDS[COMP_CWORD]}"
-	commands "` + joinWithSpaces(completionCommands) + `"
-	if ["$COMP_CWORD" -eq 1]; then 
-		COMPREPLY = ( $(compgen -W "${commands} -- "${cur}"") )
+	cur="${COMP_WORDS[COMP_CWORD]}"
+	commands="` + joinWithSpaces(completionCommands) + `"
+	if [ "$COMP_CWORD" -eq 1 ]; then
+		COMPREPLY=( $(compgen -W "${commands}" -- "${cur}") )
 	fi
 }	
 complete -F _aegisctl_completion aegisctl	
@@ -46,7 +46,7 @@ func joinWithSpaces(items []string) string {
 	return result
 }
 
-func cmdCompletation(args []string) error {
+func cmdCompletion(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: aegisctl completion <bash|zsh>")
 	}

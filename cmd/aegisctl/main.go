@@ -55,12 +55,12 @@ func main() {
 
 	switch os.Args[1] {
 	case "completion":
-		if len (os.Args) < 3 {
+		if len(os.Args) < 3 {
 			fmt.Println("Usage: aegisctl completion <bash|zsh>")
-			os. Exit(1)
+			os.Exit(1)
 		}
-		var err error = cmdCompletation(os.Args[2:]);
-		if  err != nil {
+		var err error = cmdCompletion(os.Args[2:])
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v \n", err)
 			os.Exit(1)
 		}
