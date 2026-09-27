@@ -59,12 +59,10 @@ func main() {
 			fmt.Println("Usage: aegisctl completion <bash|zsh>")
 			os.Exit(1)
 		}
-		var err error = cmdCompletion(os.Args[2:])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v \n", err)
+		if err := cmdCompletion(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-
 	case "plugin":
 		if len(os.Args) < 3 {
 			fmt.Println("Usage: aegisctl plugin <search|info|install|list|outdated|remove> [args]")

@@ -58,6 +58,7 @@ nav:
   - Home: index.md
   - Getting started:
       - Local quickstart: getting-started.md
+      - Shell completion: aegisctl-completion.md
       - Governed PR proof: PR_WRITER.md
       - Troubleshooting: troubleshooting.md
   - Agent security:

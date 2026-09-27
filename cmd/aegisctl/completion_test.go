@@ -2,28 +2,10 @@ package main
 
 import (
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 )
-
-func TestJoinWithSpaces(t *testing.T) {
-	tests := []struct {
-		name  string
-		items []string
-		want  string
-	}{
-		{"nil", nil, ""},
-		{"single", []string{"status"}, "status"},
-		{"multiple", []string{"status", "usage", "models"}, "status usage models"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := joinWithSpaces(tt.items); got != tt.want {
-				t.Fatalf("got %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
 
 func TestCompletionCommands_NoDuplicatesOrBlanks(t *testing.T) {
 	seen := make(map[string]bool, len(completionCommands))
@@ -101,7 +83,7 @@ func TestBashCompletion_Behavior(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			script := bashCompletionScript() +
 				"\nCOMP_WORDS=(" + tt.words + ")\n" +
-				"COMP_CWORD=" + string(rune('0'+tt.cword)) + "\n" +
+				"COMP_CWORD=" + strconv.Itoa(tt.cword) + "\n" +
 				"COMPREPLY=()\n" +
 				"_aegisctl_completion\n" +
 				`printf '%s\n' "${COMPREPLY[@]}"` + "\n"

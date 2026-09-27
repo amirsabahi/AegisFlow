@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 )
 
 var completionCommands = []string{
@@ -15,35 +16,23 @@ func bashCompletionScript() string {
 	return `_aegisctl_completion() {
 	local cur commands
 	cur="${COMP_WORDS[COMP_CWORD]}"
-	commands="` + joinWithSpaces(completionCommands) + `"
+	commands="` + strings.Join(completionCommands, " ") + `"
 	if [ "$COMP_CWORD" -eq 1 ]; then
 		COMPREPLY=( $(compgen -W "${commands}" -- "${cur}") )
 	fi
-}	
-complete -F _aegisctl_completion aegisctl	
-	`
 }
-
-func zshCompletionScript() string {
-	return `
-	_aegisctl() {
-		local -a commands
-		commands=(` + joinWithSpaces(completionCommands) + `)
-		_describe 'command' commands		
-}
-_aegisctl		
+complete -F _aegisctl_completion aegisctl
 `
 }
 
-func joinWithSpaces(items []string) string {
-	result := ""
-	for i, item := range items {
-		if i > 0 {
-			result += " "
-		}
-		result += item
-	}
-	return result
+func zshCompletionScript() string {
+	return `_aegisctl() {
+	local -a commands
+	commands=(` + strings.Join(completionCommands, " ") + `)
+	_describe 'command' commands
+}
+_aegisctl
+`
 }
 
 func cmdCompletion(args []string) error {
@@ -56,7 +45,7 @@ func cmdCompletion(args []string) error {
 	case "zsh":
 		fmt.Print(zshCompletionScript())
 	default:
-		return fmt.Errorf("Unknown shell %q, expected \"bash\" or \"zsh\"", args[0])
+		return fmt.Errorf("unknown shell %q, expected \"bash\" or \"zsh\"", args[0])
 	}
 	return nil
 }
