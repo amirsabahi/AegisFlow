@@ -4,13 +4,13 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/url"
 	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/saivedant169/AegisFlow/internal/cleanup"
 )
 
 const (
@@ -20,38 +20,14 @@ const (
 
 var version = "dev"
 
-var client = &http.Client{Timeout: 10 * time.Second, Transport: authenticatedTransport{}, CheckRedirect: func(req *http.Request, via []*http.Request) error {
-	if len(via) >= 10 {
-		return fmt.Errorf("stopped after 10 redirects")
-	}
-	if req.URL.Scheme != via[0].URL.Scheme || req.URL.Host != via[0].URL.Host {
-		return http.ErrUseLastResponse
-	}
-	return nil
-}}
-
-type authenticatedTransport struct{}
-
-func (authenticatedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	copy := req.Clone(req.Context())
-	admin, err := url.Parse(getEnv("AEGISFLOW_ADMIN_URL", defaultAdminURL))
-	if err != nil {
-		return nil, err
-	}
-	if key := os.Getenv("AEGISFLOW_API_KEY"); key != "" && copy.Header.Get("X-API-Key") == "" && copy.URL.Scheme == admin.Scheme && copy.URL.Host == admin.Host && strings.HasPrefix(copy.URL.Path, "/admin/v1/") {
-		copy.Header.Set("X-API-Key", key)
-	}
-	return http.DefaultTransport.RoundTrip(copy)
-}
-
 func main() {
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
 	}
 
-	adminURL := getEnv("AEGISFLOW_ADMIN_URL", defaultAdminURL)
-	gatewayURL := getEnv("AEGISFLOW_GATEWAY_URL", defaultGatewayURL)
+	adminURL := strings.TrimRight(getEnv("AEGISFLOW_ADMIN_URL", defaultAdminURL), "/")
+	gatewayURL := strings.TrimRight(getEnv("AEGISFLOW_GATEWAY_URL", defaultGatewayURL), "/")
 
 	switch os.Args[1] {
 	case "completion":
@@ -91,6 +67,12 @@ func main() {
 			os.Exit(1)
 		}
 	case "status":
+		for _, entry := range [][2]string{{"AEGISFLOW_ADMIN_URL", defaultAdminURL}, {"AEGISFLOW_GATEWAY_URL", defaultGatewayURL}} {
+			if _, err := apiBase(entry[0], entry[1]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
 		jsonOut := false
 		for _, a := range os.Args[2:] {
 			if a == "--json" || a == "-json" {
@@ -251,13 +233,12 @@ func main() {
 	case "test-action":
 		cmdTestAction(adminURL, os.Args[2:])
 	case "test":
-		apiKey := "aegis-test-default-001"
 		model := "mock"
 		msg := "Hello from aegisctl!"
 		if len(os.Args) > 2 {
 			msg = strings.Join(os.Args[2:], " ")
 		}
-		cmdTest(gatewayURL, apiKey, model, msg)
+		cmdTest(gatewayURL, model, msg)
 	case "help", "--help", "-h":
 		printUsage()
 	case "version":
@@ -314,7 +295,7 @@ Commands:
   approve     Approve a pending item: aegisctl approve <id> [comment]
   deny        Deny a pending item: aegisctl deny <id> [comment]
   policy      Policy versioning (history, current, rollback)
-  simulate    Simulate a policy decision with full trace
+  simulate    Simulate remote policy (--dry-run uses local example rules)
   why         Show decision trace for a past action: aegisctl why <envelope-id>
   diff-policy Diff two policy files: aegisctl diff-policy <old.yaml> <new.yaml>
   manifest    Manage task manifests and drift detection (create, list, drift)
@@ -327,7 +308,8 @@ Commands:
 
 Environment:
   AEGISFLOW_GATEWAY_URL  Gateway URL (default: http://localhost:8080)
-  AEGISFLOW_ADMIN_URL    Admin URL (default: http://localhost:8081)`)
+  AEGISFLOW_ADMIN_URL    Admin URL (default: http://localhost:8081)
+  AEGISFLOW_API_KEY      API credential; reviewer role required for approve/deny`)
 }
 
 func cmdStatus(gatewayURL, adminURL string, jsonOut bool) {
@@ -336,8 +318,7 @@ func cmdStatus(gatewayURL, adminURL string, jsonOut bool) {
 	adOK := checkHealth(adminURL + "/health")
 
 	if jsonOut {
-		emitStatusJSON(gatewayURL, adminURL, gwOK, adOK)
-		if !gwOK || !adOK {
+		if !emitStatusJSON(gatewayURL, adminURL, gwOK, adOK) {
 			os.Exit(1)
 		}
 		return
@@ -355,6 +336,9 @@ func cmdStatus(gatewayURL, adminURL string, jsonOut bool) {
 
 	mcpGatewayHealthy := true
 	sysStatus := fetchJSON(adminURL + "/admin/v1/system/status")
+	if sysStatus == nil {
+		os.Exit(1)
+	}
 	if sysMap, ok := sysStatus.(map[string]interface{}); ok {
 		fmt.Println("\nSystem")
 		fmt.Println("────────────────────────────────────────────────────")
@@ -376,6 +360,9 @@ func cmdStatus(gatewayURL, adminURL string, jsonOut bool) {
 	fmt.Println("\nProviders")
 	fmt.Println("────────────────────────────────────────────────────")
 	providers := fetchJSON(adminURL + "/admin/v1/providers")
+	if providers == nil {
+		os.Exit(1)
+	}
 	if provList, ok := providers.([]interface{}); ok && len(provList) > 0 {
 		for _, p := range provList {
 			prov, ok := p.(map[string]interface{})
@@ -400,6 +387,9 @@ func cmdStatus(gatewayURL, adminURL string, jsonOut bool) {
 	fmt.Println("\nApprovals")
 	fmt.Println("────────────────────────────────────────────────────")
 	approvals := fetchJSON(adminURL + "/admin/v1/approvals")
+	if approvals == nil {
+		os.Exit(1)
+	}
 	pendingCount := 0
 	if appData, ok := approvals.(map[string]interface{}); ok {
 		if pending, ok := appData["pending"].([]interface{}); ok {
@@ -418,6 +408,9 @@ func cmdStatus(gatewayURL, adminURL string, jsonOut bool) {
 	fmt.Println("\nEvidence")
 	fmt.Println("────────────────────────────────────────────────────")
 	sessions := fetchJSON(adminURL + "/admin/v1/evidence/sessions")
+	if sessions == nil {
+		os.Exit(1)
+	}
 	if sessList, ok := sessions.([]interface{}); ok && len(sessList) > 0 {
 		fmt.Printf("  %d active session(s)\n", len(sessList))
 		for _, s := range sessList {
@@ -440,6 +433,9 @@ func cmdStatus(gatewayURL, adminURL string, jsonOut bool) {
 	fmt.Println("\nBudgets")
 	fmt.Println("────────────────────────────────────────────────────")
 	budgets := fetchJSON(adminURL + "/admin/v1/budgets")
+	if budgets == nil {
+		os.Exit(1)
+	}
 	if budgetData, ok := budgets.(map[string]interface{}); ok {
 		if statuses, ok := budgetData["statuses"].([]interface{}); ok && len(statuses) > 0 {
 			for _, st := range statuses {
@@ -461,6 +457,9 @@ func cmdStatus(gatewayURL, adminURL string, jsonOut bool) {
 	fmt.Println("\nRecent Violations")
 	fmt.Println("────────────────────────────────────────────────────")
 	violations := fetchJSON(adminURL + "/admin/v1/violations")
+	if violations == nil {
+		os.Exit(1)
+	}
 	if violList, ok := violations.([]interface{}); ok && len(violList) > 0 {
 		shown := len(violList)
 		if shown > 5 {
@@ -492,7 +491,7 @@ func cmdStatus(gatewayURL, adminURL string, jsonOut bool) {
 
 // emitStatusJSON prints a machine-readable snapshot of the same checks
 // cmdStatus surfaces in human mode. Used by `aegisctl status --json`.
-func emitStatusJSON(gatewayURL, adminURL string, gwOK, adOK bool) {
+func emitStatusJSON(gatewayURL, adminURL string, gwOK, adOK bool) bool {
 	out := map[string]interface{}{
 		"gateway":     map[string]interface{}{"url": gatewayURL, "healthy": gwOK},
 		"admin":       map[string]interface{}{"url": adminURL, "healthy": adOK},
@@ -508,11 +507,15 @@ func emitStatusJSON(gatewayURL, adminURL string, gwOK, adOK bool) {
 			if sysMap["mcp_gateway"] == "unreachable" {
 				out["healthy"] = false
 			}
+		} else {
+			out["healthy"] = false
 		}
 		if approvals, ok := fetchJSON(adminURL + "/admin/v1/approvals").(map[string]interface{}); ok {
 			if pending, ok := approvals["pending"].([]interface{}); ok {
 				out["pending"] = len(pending)
 			}
+		} else {
+			out["healthy"] = false
 		}
 		if sess, ok := fetchJSON(adminURL + "/admin/v1/evidence/sessions").([]interface{}); ok {
 			out["sessions"] = len(sess)
@@ -525,12 +528,18 @@ func emitStatusJSON(gatewayURL, adminURL string, gwOK, adOK bool) {
 					}
 				}
 			}
+		} else {
+			out["healthy"] = false
+			out["chain_valid"] = false
 		}
 	}
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
-	_ = enc.Encode(out)
+	if err := enc.Encode(out); err != nil {
+		return false
+	}
+	return out["healthy"] == true
 }
 
 type usageModelSummary struct {
@@ -548,15 +557,7 @@ type usageTenantSummary struct {
 func cmdUsage(adminURL string, jsonOut bool) {
 	data := fetchJSON(adminURL + "/admin/v1/usage")
 	if data == nil {
-		if jsonOut {
-			out := struct {
-				Tenants []usageTenantSummary `json:"tenants"`
-			}{Tenants: []usageTenantSummary{}}
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			_ = enc.Encode(out)
-		}
-		return
+		os.Exit(1)
 	}
 
 	usageMap, ok := data.(map[string]interface{})
@@ -628,8 +629,8 @@ func cmdUsage(adminURL string, jsonOut bool) {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "TENANT\tMODEL\tREQUESTS\tTOKENS\tCOST")
-	fmt.Fprintln(w, "──────\t─────\t────────\t──────\t────")
+	checkOutput(fmt.Fprintln(w, "TENANT\tMODEL\tREQUESTS\tTOKENS\tCOST"))
+	checkOutput(fmt.Fprintln(w, "──────\t─────\t────────\t──────\t────"))
 
 	for tenantID, v := range usageMap {
 		tenant, ok := v.(map[string]interface{})
@@ -645,28 +646,27 @@ func cmdUsage(adminURL string, jsonOut bool) {
 			if !ok {
 				continue
 			}
-			fmt.Fprintf(w, "%s\t%s\t%.0f\t%.0f\t$%.6f\n",
+			checkOutput(fmt.Fprintf(w, "%s\t%s\t%.0f\t%.0f\t$%.6f\n",
 				tenantID, model,
 				toFloat(m["requests"]),
 				toFloat(m["total_tokens"]),
 				toFloat(m["estimated_cost_usd"]),
-			)
+			))
 		}
 	}
-	w.Flush()
+	if err := w.Flush(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error: could not flush output")
+		os.Exit(1)
+	}
 }
 
 func cmdModels(gatewayURL string) {
-	apiKey := getEnv("AEGISFLOW_API_KEY", "aegis-test-default-001")
-	req, _ := http.NewRequest("GET", gatewayURL+"/v1/models", nil)
-	req.Header.Set("X-API-Key", apiKey)
-
-	resp, err := client.Do(req)
+	resp, err := client.Get(gatewayURL + "/v1/models")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
+		os.Exit(1)
 	}
-	defer resp.Body.Close()
+	defer cleanup.Close(resp.Body)
 
 	var result struct {
 		Data []struct {
@@ -676,25 +676,28 @@ func cmdModels(gatewayURL string) {
 	}
 	if err := decodeJSON(resp, &result); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
+		os.Exit(1)
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "MODEL\tPROVIDER")
-	fmt.Fprintln(w, "─────\t────────")
+	checkOutput(fmt.Fprintln(w, "MODEL\tPROVIDER"))
+	checkOutput(fmt.Fprintln(w, "─────\t────────"))
 	for _, m := range result.Data {
-		fmt.Fprintf(w, "%s\t%s\n", m.ID, m.Provider)
+		checkOutput(fmt.Fprintf(w, "%s\t%s\n", m.ID, m.Provider))
 	}
-	w.Flush()
+	if err := w.Flush(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error: could not flush output")
+		os.Exit(1)
+	}
 }
 
 func cmdProviders(adminURL string) {
 	resp, err := client.Get(adminURL + "/admin/v1/providers")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
+		os.Exit(1)
 	}
-	defer resp.Body.Close()
+	defer cleanup.Close(resp.Body)
 
 	var providers []struct {
 		Name    string   `json:"name"`
@@ -705,12 +708,12 @@ func cmdProviders(adminURL string) {
 	}
 	if err := decodeJSON(resp, &providers); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
+		os.Exit(1)
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tTYPE\tSTATUS\tHEALTH\tMODELS")
-	fmt.Fprintln(w, "────\t────\t──────\t──────\t──────")
+	checkOutput(fmt.Fprintln(w, "NAME\tTYPE\tSTATUS\tHEALTH\tMODELS"))
+	checkOutput(fmt.Fprintln(w, "────\t────\t──────\t──────\t──────"))
 	for _, p := range providers {
 		status := "disabled"
 		if p.Enabled {
@@ -724,18 +727,21 @@ func cmdProviders(adminURL string) {
 		if len(models) > 40 {
 			models = models[:37] + "..."
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", p.Name, p.Type, status, health, models)
+		checkOutput(fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", p.Name, p.Type, status, health, models))
 	}
-	w.Flush()
+	if err := w.Flush(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error: could not flush output")
+		os.Exit(1)
+	}
 }
 
 func cmdPolicies(adminURL string) {
 	resp, err := client.Get(adminURL + "/admin/v1/policies")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
+		os.Exit(1)
 	}
-	defer resp.Body.Close()
+	defer cleanup.Close(resp.Body)
 
 	var policies []struct {
 		Name     string   `json:"name"`
@@ -747,12 +753,12 @@ func cmdPolicies(adminURL string) {
 	}
 	if err := decodeJSON(resp, &policies); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
+		os.Exit(1)
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "NAME\tTYPE\tPHASE\tACTION\tRULES")
-	fmt.Fprintln(w, "────\t────\t─────\t──────\t─────")
+	checkOutput(fmt.Fprintln(w, "NAME\tTYPE\tPHASE\tACTION\tRULES"))
+	checkOutput(fmt.Fprintln(w, "────\t────\t─────\t──────\t─────"))
 	for _, p := range policies {
 		rules := append(p.Keywords, p.Patterns...)
 		ruleStr := strings.Join(rules, ", ")
@@ -762,18 +768,21 @@ func cmdPolicies(adminURL string) {
 		if ruleStr == "" {
 			ruleStr = "-"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", p.Name, p.Type, p.Phase, strings.ToUpper(p.Action), ruleStr)
+		checkOutput(fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", p.Name, p.Type, p.Phase, strings.ToUpper(p.Action), ruleStr))
 	}
-	w.Flush()
+	if err := w.Flush(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error: could not flush output")
+		os.Exit(1)
+	}
 }
 
 func cmdTenants(adminURL string) {
 	resp, err := client.Get(adminURL + "/admin/v1/tenants")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
+		os.Exit(1)
 	}
-	defer resp.Body.Close()
+	defer cleanup.Close(resp.Body)
 
 	var tenants []struct {
 		ID                string `json:"id"`
@@ -784,34 +793,37 @@ func cmdTenants(adminURL string) {
 	}
 	if err := decodeJSON(resp, &tenants); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
+		os.Exit(1)
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tNAME\tKEYS\tREQ/MIN\tTOK/MIN")
-	fmt.Fprintln(w, "──\t────\t────\t───────\t───────")
+	checkOutput(fmt.Fprintln(w, "ID\tNAME\tKEYS\tREQ/MIN\tTOK/MIN"))
+	checkOutput(fmt.Fprintln(w, "──\t────\t────\t───────\t───────"))
 	for _, t := range tenants {
-		fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\n", t.ID, t.Name, t.KeyCount, t.RequestsPerMinute, t.TokensPerMinute)
+		checkOutput(fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\n", t.ID, t.Name, t.KeyCount, t.RequestsPerMinute, t.TokensPerMinute))
 	}
-	w.Flush()
+	if err := w.Flush(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error: could not flush output")
+		os.Exit(1)
+	}
 }
 
-func cmdTest(gatewayURL, apiKey, model, message string) {
-	body := fmt.Sprintf(`{"model":"%s","messages":[{"role":"user","content":"%s"}]}`, model, message)
-
-	req, _ := http.NewRequest("POST", gatewayURL+"/v1/chat/completions", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", apiKey)
+func cmdTest(gatewayURL, model, message string) {
+	body, err := marshalJSON(map[string]interface{}{"model": model, "messages": []map[string]string{{"role": "user", "content": message}}})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Error: could not encode chat request")
+		os.Exit(1)
+	}
 
 	start := time.Now()
-	resp, err := client.Do(req)
+	resp, err := client.Post(gatewayURL+"/v1/chat/completions", "application/json", bytes.NewReader(body))
 	latency := time.Since(start)
 
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
+	defer cleanup.Close(resp.Body)
 
 	var result struct {
 		Choices []struct {
@@ -843,6 +855,10 @@ func cmdTest(gatewayURL, apiKey, model, message string) {
 	fmt.Printf("Model:    %s\n", model)
 	fmt.Printf("Latency:  %s\n", latency.Round(time.Millisecond))
 	fmt.Printf("Tokens:   %d\n", result.Usage.TotalTokens)
+	if len(result.Choices) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: chat response contains no choices")
+		os.Exit(1)
+	}
 	fmt.Printf("Response: %s\n", result.Choices[0].Message.Content)
 }
 
@@ -851,7 +867,7 @@ func checkHealth(url string) bool {
 	if err != nil {
 		return false
 	}
-	resp.Body.Close()
+	cleanup.Close(resp.Body)
 	return resp.StatusCode == 200
 }
 
@@ -861,7 +877,7 @@ func fetchJSON(url string) interface{} {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		return nil
 	}
-	defer resp.Body.Close()
+	defer cleanup.Close(resp.Body)
 
 	var result interface{}
 	if err := decodeJSON(resp, &result); err != nil {
@@ -902,7 +918,7 @@ func cmdPending(adminURL string, jsonOut bool) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
+	defer cleanup.Close(resp.Body)
 	var result map[string]interface{}
 	if err := decodeJSON(resp, &result); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -927,29 +943,28 @@ func cmdPending(adminURL string, jsonOut bool) {
 		return
 	}
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(tw, "ID\tTOOL\tPROTOCOL\tACTOR\tSUBMITTED\n")
+	checkOutput(fmt.Fprintf(tw, "ID\tTOOL\tPROTOCOL\tACTOR\tSUBMITTED\n"))
 	for _, p := range pending {
 		item, _ := p.(map[string]interface{})
 		env, _ := item["envelope"].(map[string]interface{})
 		actor, _ := env["actor"].(map[string]interface{})
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			item["id"], env["tool"], env["protocol"], actor["id"], item["submitted_at"])
+		checkOutput(fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+			item["id"], env["tool"], env["protocol"], actor["id"], item["submitted_at"]))
 	}
-	tw.Flush()
+	if err := tw.Flush(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error: could not flush output")
+		os.Exit(1)
+	}
 }
 
 func cmdApprove(adminURL, id, comment string) {
-	apiKey := getEnv("AEGISFLOW_API_KEY", "aegis-test-default-001")
-	body, _ := marshalJSON(map[string]string{"reviewer": "aegisctl", "comment": comment})
-	req, _ := http.NewRequest("POST", adminURL+"/admin/v1/approvals/"+id+"/approve", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", apiKey)
-	resp, err := client.Do(req)
+	body, _ := marshalJSON(map[string]string{"comment": comment})
+	resp, err := client.Post(adminURL+"/admin/v1/approvals/"+id+"/approve", "application/json", bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
+	defer cleanup.Close(resp.Body)
 	if resp.StatusCode != 200 {
 		var result struct {
 			Error struct {
@@ -967,17 +982,13 @@ func cmdApprove(adminURL, id, comment string) {
 }
 
 func cmdDeny(adminURL, id, comment string) {
-	apiKey := getEnv("AEGISFLOW_API_KEY", "aegis-test-default-001")
-	body, _ := marshalJSON(map[string]string{"reviewer": "aegisctl", "comment": comment})
-	req, _ := http.NewRequest("POST", adminURL+"/admin/v1/approvals/"+id+"/deny", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", apiKey)
-	resp, err := client.Do(req)
+	body, _ := marshalJSON(map[string]string{"comment": comment})
+	resp, err := client.Post(adminURL+"/admin/v1/approvals/"+id+"/deny", "application/json", bytes.NewReader(body))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
+	defer cleanup.Close(resp.Body)
 	if resp.StatusCode != 200 {
 		var result struct {
 			Error struct {

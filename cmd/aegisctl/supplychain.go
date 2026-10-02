@@ -13,21 +13,21 @@ import (
 func cmdSupplyChainList(adminURL string) {
 	data := fetchJSON(adminURL + "/admin/v1/supply-chain")
 	if data == nil {
-		return
+		os.Exit(1)
 	}
 
 	raw, err := json.Marshal(data)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
+		os.Exit(1)
 	}
 
 	var resp struct {
 		Assets []supply.LoadedAsset `json:"assets"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
-		return
+		fmt.Fprintln(os.Stderr, "Error: invalid response")
+		os.Exit(1)
 	}
 
 	if len(resp.Assets) == 0 {
@@ -36,18 +36,21 @@ func cmdSupplyChainList(adminURL string) {
 	}
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tVERSION\tTYPE\tTRUST TIER\tVERIFIED\tLOADED AT")
-	fmt.Fprintln(tw, "────\t───────\t────\t──────────\t────────\t─────────")
+	checkOutput(fmt.Fprintln(tw, "NAME\tVERSION\tTYPE\tTRUST TIER\tVERIFIED\tLOADED AT"))
+	checkOutput(fmt.Fprintln(tw, "────\t───────\t────\t──────────\t────────\t─────────"))
 	for _, a := range resp.Assets {
 		verified := "no"
 		if a.Verified {
 			verified = "yes"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+		checkOutput(fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			a.Name, a.Version, a.Type, a.TrustTier, verified,
-			a.LoadedAt.Format("2006-01-02 15:04:05"))
+			a.LoadedAt.Format("2006-01-02 15:04:05")))
 	}
-	tw.Flush()
+	if err := tw.Flush(); err != nil {
+		fmt.Fprintln(os.Stderr, "Error: could not flush output")
+		os.Exit(1)
+	}
 }
 
 func cmdSupplyChainSign(args []string) {

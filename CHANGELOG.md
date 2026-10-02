@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-13
+
+### Changed
+
+- Runtime credential issuance is unavailable pending broker hardening. Configurations with `credentials.enabled: true` now fail startup. See [candidate migration notes](docs/releases/corrective-candidate.md).
+- CLI requests use configured credentials consistently, reject redirects, and return nonzero on invalid evidence verification and failed remote reads. Local policy examples require explicit `--dry-run`.
+- Release builds validate tag, changelog, chart, and release notes together. The installer pins one stable tag, validates binary versions, and supports either gateway or CLI installation.
+
 ### Added
 
 - `aegisctl completion bash|zsh` to print shell command completion scripts.
@@ -14,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Approval security E2E covering process restart, exact retry, replay, argument changes, and altered evidence.
 
 ### Fixed
+
+- Atomic plugin updates preserve file permissions and reject non-regular destinations; failed config writes restore previous plugin bytes.
+- Response and stream write failures stop delivery; approval submission failures no longer claim pending review.
+- Runtime documentation now distinguishes supported boundaries from experimental libraries and removes unverified incident claims.
 
 - Direct HTTP `tools/list` responses now hide tools blocked by policy.
 - Evidence session exports now return JSON objects instead of quoted base64 data.

@@ -34,6 +34,9 @@ jobs:
       - name: Build
         run: go build ./...
 
+      - name: Release metadata validation tests
+        run: python3 scripts/test_release_metadata.py
+
       - name: Installer verification
         run: bash scripts/test_install.sh
 
@@ -43,12 +46,15 @@ jobs:
       - name: Test
         run: go test ./... -v -race -count=1 -coverprofile=coverage.out -covermode=atomic
 
+      - name: CLI reliability E2E
+        run: python3 scripts/e2e_cli.py
+
       - name: Approval security E2E
         run: bash scripts/e2e_approval_security.sh
 
       - name: Upload coverage to Codecov
         continue-on-error: true
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage.out

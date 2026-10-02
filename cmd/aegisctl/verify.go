@@ -1,20 +1,22 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"strings"
+
+	"github.com/saivedant169/AegisFlow/internal/cleanup"
 )
 
 func cmdVerify(adminURL string, args []string) {
 	sessionID := ""
 	for i := 0; i < len(args); i++ {
-		if args[i] == "--session" && i+1 < len(args) {
-			sessionID = args[i+1]
-			i++
+		if args[i] != "--session" || sessionID != "" || i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "--") {
+			fmt.Fprintln(os.Stderr, "Usage: aegisctl verify [--session <id>]")
+			os.Exit(1)
 		}
+		sessionID = args[i+1]
+		i++
 	}
 
 	var url string
@@ -29,25 +31,21 @@ func cmdVerify(adminURL string, args []string) {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading response: %v\n", err)
-		os.Exit(1)
-	}
-	if resp.StatusCode != 200 {
-		fmt.Fprintf(os.Stderr, "Error (%d): %s\n", resp.StatusCode, string(body))
-		os.Exit(1)
-	}
+	defer cleanup.Close(resp.Body)
 
 	var result VerifyResponse
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := decodeJSON(resp, &result); err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing response: %v\n", err)
 		os.Exit(1)
 	}
+	if key := os.Getenv("AEGISFLOW_API_KEY"); key != "" {
+		result.Message = strings.ReplaceAll(result.Message, key, "[redacted]")
+	}
 
 	printVerifyResult(result)
+	if !result.Valid {
+		os.Exit(1)
+	}
 }
 
 // VerifyResponse matches the evidence.VerifyResult JSON structure.
@@ -81,12 +79,12 @@ func formatVerifyResult(r VerifyResponse) string {
 	} else {
 		sb.WriteString("FAIL  Evidence chain verification failed\n")
 	}
-	sb.WriteString(fmt.Sprintf("  Total entries: %d\n", r.TotalRecords))
+	fmt.Fprintf(&sb, "  Total entries: %d\n", r.TotalRecords)
 	if !r.Valid && r.ErrorAtIndex > 0 {
-		sb.WriteString(fmt.Sprintf("  Error at index: %d\n", r.ErrorAtIndex))
+		fmt.Fprintf(&sb, "  Error at index: %d\n", r.ErrorAtIndex)
 	}
 	if r.Message != "" {
-		sb.WriteString(fmt.Sprintf("  Message: %s\n", r.Message))
+		fmt.Fprintf(&sb, "  Message: %s\n", r.Message)
 	}
 	return sb.String()
 }
