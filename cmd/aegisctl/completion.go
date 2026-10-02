@@ -26,12 +26,14 @@ complete -F _aegisctl_completion aegisctl
 }
 
 func zshCompletionScript() string {
-	return `_aegisctl() {
+	return `#compdef aegisctl
+
+_aegisctl() {
 	local -a commands
 	commands=(` + strings.Join(completionCommands, " ") + `)
 	_describe 'command' commands
 }
-_aegisctl
+compdef _aegisctl aegisctl
 `
 }
 

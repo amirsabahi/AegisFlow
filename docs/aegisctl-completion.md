@@ -12,11 +12,17 @@ aegisctl completion zsh
 With `aegisctl` on your `PATH`, load completions in the current shell with:
 
 ```bash
-source <(aegisctl completion bash)
+eval "$(aegisctl completion bash)"
 ```
 
-Add that `source` line to `~/.bashrc` to load it in future Bash sessions.
+Add that line to `~/.bashrc` to load completions in future Bash sessions.
 
 ## Zsh Script Generation
 
-`aegisctl completion zsh` prints its shell-specific completion script for use with your Zsh completion setup.
+Add this to `~/.zshrc`, after initializing Zsh completions with `compinit`:
+
+```zsh
+autoload -Uz compinit
+compinit
+source <(aegisctl completion zsh)
+```
