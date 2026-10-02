@@ -15,6 +15,7 @@ var completionCommands = []string{
 func bashCompletionScript() string {
 	return `_aegisctl_completion() {
 	local cur commands
+	COMPREPLY=()
 	cur="${COMP_WORDS[COMP_CWORD]}"
 	commands="` + strings.Join(completionCommands, " ") + `"
 	if [ "$COMP_CWORD" -eq 1 ]; then
@@ -29,25 +30,35 @@ func zshCompletionScript() string {
 	return `#compdef aegisctl
 
 _aegisctl() {
+	(( CURRENT == 2 )) || return 1
 	local -a commands
 	commands=(` + strings.Join(completionCommands, " ") + `)
 	_describe 'command' commands
 }
-compdef _aegisctl aegisctl
+# When autoloaded from fpath, complete on the first invocation too.
+if [[ $funcstack[1] == _aegisctl ]]; then
+	_aegisctl "$@"
+else
+	compdef _aegisctl aegisctl
+fi
 `
 }
 
 func cmdCompletion(args []string) error {
-	if len(args) < 1 {
+	if len(args) != 1 {
 		return fmt.Errorf("usage: aegisctl completion <bash|zsh>")
 	}
+	var script string
 	switch args[0] {
 	case "bash":
-		fmt.Print(bashCompletionScript())
+		script = bashCompletionScript()
 	case "zsh":
-		fmt.Print(zshCompletionScript())
+		script = zshCompletionScript()
 	default:
 		return fmt.Errorf("unknown shell %q, expected \"bash\" or \"zsh\"", args[0])
+	}
+	if _, err := fmt.Print(script); err != nil {
+		return fmt.Errorf("could not write completion script: %w", err)
 	}
 	return nil
 }

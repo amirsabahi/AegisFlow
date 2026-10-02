@@ -1,7 +1,10 @@
 package main
 
 import (
+	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -75,6 +78,7 @@ func TestBashCompletion_Behavior(t *testing.T) {
 		wantNone bool
 	}{
 		{name: "prefix narrows to matches", words: `aegisctl po`, cword: 1, want: "policy-pack policies policy"},
+		{name: "empty prefix lists all commands", words: `aegisctl ''`, cword: 1, want: strings.Join(completionCommands, " ")},
 		{name: "exact single match", words: `aegisctl approve`, cword: 1, want: "approve"},
 		{name: "no match", words: `aegisctl zzz`, cword: 1, wantNone: true},
 		{name: "second argument is not completed", words: `aegisctl completion b`, cword: 2, wantNone: true},
@@ -84,7 +88,7 @@ func TestBashCompletion_Behavior(t *testing.T) {
 			script := bashCompletionScript() +
 				"\nCOMP_WORDS=(" + tt.words + ")\n" +
 				"COMP_CWORD=" + strconv.Itoa(tt.cword) + "\n" +
-				"COMPREPLY=()\n" +
+				"COMPREPLY=(stale)\n" +
 				"_aegisctl_completion\n" +
 				`printf '%s\n' "${COMPREPLY[@]}"` + "\n"
 
@@ -112,6 +116,53 @@ func TestBashCompletion_Behavior(t *testing.T) {
 				if !gotSet[w] {
 					t.Fatalf("candidates: got %v, want %v", got, want)
 				}
+			}
+		})
+	}
+}
+
+// Use the real completion initializer for both supported Zsh loading methods.
+// Replace only _describe, which normally needs an interactive completion context.
+func TestZshCompletion_Behavior(t *testing.T) {
+	path, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh not installed")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "_aegisctl"), []byte(zshCompletionScript()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"source", "autoload"} {
+		t.Run(mode, func(t *testing.T) {
+			script := `
+# Exclude broken third-party completion symlinks from the test environment.
+fpath=( ${^fpath}/compinit(N:h) ${^fpath}/_main_complete(N:h) )
+if [[ $2 == autoload ]]; then
+	fpath=( "$1" $fpath )
+fi
+autoload -Uz compinit
+compinit -D -i
+if [[ $2 == source ]]; then
+	source "$1/_aegisctl"
+fi
+[[ $_comps[aegisctl] == _aegisctl ]] || exit 10
+_describe() { print -l -- "${(@P)2}"; }
+# The first autoloaded call must produce candidates too.
+CURRENT=2
+_aegisctl
+CURRENT=3
+_aegisctl
+CURRENT=4
+_aegisctl
+exit 0
+`
+			out, err := exec.Command(path, "-f", "-c", script, "zsh", dir, mode).CombinedOutput()
+			if err != nil {
+				t.Fatalf("zsh failed: %v\n%s", err, out)
+			}
+			want := strings.Join(completionCommands, "\n") + "\n"
+			if string(out) != want {
+				t.Fatalf("candidates: got %q, want %q", out, want)
 			}
 		})
 	}
@@ -147,6 +198,7 @@ func TestCmdCompletion_Errors(t *testing.T) {
 	}{
 		{"no shell", nil, "usage: aegisctl completion"},
 		{"unknown shell", []string{"fish"}, `"fish"`},
+		{"extra argument", []string{"bash", "extra"}, "usage: aegisctl completion"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -162,5 +214,23 @@ func TestCmdCompletion_Errors(t *testing.T) {
 				t.Fatalf("nothing should be printed on error, got %q", out)
 			}
 		})
+	}
+}
+
+func TestCmdCompletion_OutputFailure(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "closed-output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	original := os.Stdout
+	os.Stdout = f
+	t.Cleanup(func() { os.Stdout = original })
+	for _, shell := range []string{"bash", "zsh"} {
+		if err := cmdCompletion([]string{shell}); !errors.Is(err, os.ErrClosed) {
+			t.Errorf("%s: expected closed-output error, got %v", shell, err)
+		}
 	}
 }

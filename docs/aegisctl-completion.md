@@ -7,6 +7,9 @@ aegisctl completion bash
 aegisctl completion zsh
 ```
 
+Both scripts complete top-level command names. Subcommands, flags, and argument
+values are not completed.
+
 ## Bash Installation
 
 With `aegisctl` on your `PATH`, load completions in the current shell with:
@@ -17,12 +20,15 @@ eval "$(aegisctl completion bash)"
 
 Add that line to `~/.bashrc` to load completions in future Bash sessions.
 
-## Zsh Script Generation
+## Zsh Installation
 
-Add this to `~/.zshrc`, after initializing Zsh completions with `compinit`:
+With `aegisctl` on your `PATH`, add this to `~/.zshrc`:
 
 ```zsh
 autoload -Uz compinit
 compinit
 source <(aegisctl completion zsh)
 ```
+
+If your Zsh configuration already runs `compinit`, add only the `source` line
+after it.
